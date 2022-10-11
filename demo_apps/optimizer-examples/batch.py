@@ -9,6 +9,7 @@ from parsl.executors import HighThroughputExecutor, ThreadPoolExecutor
 from parsl.providers import LocalProvider
 from functools import partial, update_wrapper
 from parsl.config import Config
+from balsam.api import ApplicationDefinition,Site
 from datetime import datetime
 import numpy as np
 import argparse
@@ -17,6 +18,7 @@ import json
 import sys
 import os
 
+balsam_site = 'my-laptop'
 
 # Hard code the function to be optimized
 def ackley(x: np.ndarray, a=20, b=0.2, c=2 * np.pi, mean_rt=0, std_rt=0.1) -> np.ndarray:
@@ -51,6 +53,12 @@ def ackley(x: np.ndarray, a=20, b=0.2, c=2 * np.pi, mean_rt=0, std_rt=0.1) -> np
     y = - a * np.exp(-b * np.sqrt(np.sum(x ** 2, axis=1) / d)) - np.exp(np.cos(c * x).sum(axis=1) / d) + a + np.e
     return y[0]
 
+
+class Ackley(ApplicationDefinition):
+    site = balsam_site
+    def run(self,x_in):
+        return ackley(x_in)
+Ackley.sync()
 
 class Thinker(BaseThinker):
     """Tool that monitors results of simulations and calls for new ones, as appropriate"""
@@ -142,7 +150,9 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     # Connect to the redis server
-    client_queues, server_queues = make_queue_pairs(args.redishost, args.redisport, serialization_method='json')
+    #client_queues, server_queues = make_queue_pairs(args.redishost, args.redisport, serialization_method='json')
+    server_queues = 'local'
+
 
     # Make the output directory
     out_dir = os.path.join('runs',
@@ -160,31 +170,34 @@ if __name__ == '__main__':
                         handlers=[logging.FileHandler(os.path.join(out_dir, 'runtime.log')),
                                   logging.StreamHandler(sys.stdout)])
 
-    # Write the configuration
-    config = Config(
-        executors=[
-            HighThroughputExecutor(
-                address="localhost",
-                label="htex",
-                # Max workers limits the concurrency exposed via mom node
-                max_workers=args.num_parallel,
-                cores_per_worker=0.0001,
-                worker_port_range=(10000, 20000),
-                provider=LocalProvider(
-                    init_blocks=1,
-                    max_blocks=1,
-                ),
-            ),
-            ThreadPoolExecutor(label="local_threads", max_threads=4)
-        ],
-        strategy=None,
-    )
-    config.run_dir = os.path.join(out_dir, 'run-info')
+    # # Write the configuration
+    # config = Config(
+    #     executors=[
+    #         HighThroughputExecutor(
+    #             address="localhost",
+    #             label="htex",
+    #             # Max workers limits the concurrency exposed via mom node
+    #             max_workers=args.num_parallel,
+    #             cores_per_worker=0.0001,
+    #             worker_port_range=(10000, 20000),
+    #             provider=LocalProvider(
+    #                 init_blocks=1,
+    #                 max_blocks=1,
+    #             ),
+    #         ),
+    #         ThreadPoolExecutor(label="local_threads", max_threads=4)
+    #     ],
+    #     strategy=None,
+    # )
+    # config.run_dir = os.path.join(out_dir, 'run-info')
 
     # Create the task server and task generator
     my_ackley = partial(ackley, mean_rt=np.log(args.runtime), std_rt=np.log(args.runtime_var))
     update_wrapper(my_ackley, ackley)
-    doer = ParslTaskServer([my_ackley], server_queues, config, default_executors=['htex'])
+    doer = BalsamTaskServer([my_ackley], 
+                            server_queues, 
+                            balsam_site, 
+                            aliases={'ackley':'Ackley'})
     thinker = Thinker(client_queues, out_dir, dim=args.dim, n_guesses=args.num_guesses,
                       batch_size=args.num_parallel)
     logging.info('Created the task server and task generator')

@@ -7,6 +7,7 @@ from parsl import HighThroughputExecutor
 from parsl.config import Config
 
 from colmena.task_server import ParslTaskServer
+from colmena.task_server import BalsamTaskServer
 from colmena.redis.queue import make_queue_pairs
 from colmena.thinker import BaseThinker, agent
 

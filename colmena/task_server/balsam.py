@@ -20,13 +20,11 @@ class BalsamTaskServer(BaseTaskServer):
 
     def __init__(self,
                  queues: TaskServerQueues, 
-                 login_creds: Any, # unclear if this is necessary; the balsam site should be sufficient; the site will contain the user's allocation, balsam login, etc.
                  pull_frequency: float,
                  balsam_site: str,
                  aliases: Optional[Dict[str, str]] = None,
                  timeout: Optional[int] = None):
         """
-
         Args:
             aliases: Mapping between simple names and names of application for Balsam
             pull_frequency: How often to check for new tasks
@@ -37,27 +35,24 @@ class BalsamTaskServer(BaseTaskServer):
         self.aliases = aliases.copy()
         self.pull_frequency = pull_frequency
 
-        # Store the user credentials
-        self.login_creds = login_creds
-        self.server_id = str(uuid4())
-
         # Ongoing tasks
         self.ongoing_tasks: Dict[str, Result] = dict() #Is this running tasks?
 
         # Placeholder for a client objects
-        self.balsam_client: Optional[Any] = None #not sure what this would be
+        self.balsam_site = balsam_site
+
 
     def process_queue(self, topic: str, task: Result):
         # TODO (wardlt): Send the task to Balsam
 
         # Get the name of the method
         #app_name should be a string that the app is registered under in the balsam site
-        app_name = self.aliases.get(task.method, task.method)
+        app_name = self.aliases.get(task.method)
         job = Job(app_id=app_name, 
                 site_name=self.balsam_site,
                 workdir=task.workdir,
                 parameters=task.args,
-                tags={'topic': topic, 'server_id': self.server_id, 'colmena_task_id': task.task_id},
+                tags={'topic': topic, 'server_id': self.server_id, 'colmena_task_id': task.task_id, 'returned_to_colmena':False},
                 num_nodes=task.resources.node_count,
                 node_packing_count=task.resources.node_packing_count,
                 ranks_per_node=task.resources.ranks_per_node,
@@ -76,11 +71,12 @@ class BalsamTaskServer(BaseTaskServer):
             #get the site id
             site = Site.objects.get(name=self.balsam_site)
             #use the filtering function to identify finished jobs in the site
-            new_jobs = Job.objects.filter(site_id=site.id,state='JOB_FINISHED')
+            new_jobs = Job.objects.filter(site_id=site.id,state='JOB_FINISHED',tags={'returned_to_colmena':False})
             # Send the completed tasks back
             for job in new_jobs:
                 # Get the associated Colmena task
                 result = self.ongoing_tasks.pop(job.tags['colmena_task_id'])
+                job.tags['returned_to_colmena'] = True
 
                 # Add the result to the Colmena message and serialize it all
                 #I'm not sure what form this result takes and how to pass it
@@ -106,7 +102,7 @@ class BalsamTaskServer(BaseTaskServer):
         #return_thread.start()
         
         #I'm not sure, but is this where we should start the launcher?
-        BatchJob.objects.create(num_nodes=1,
+        BatchJob.objects.create(num_nodes=self.num_nodes,
                                 wall_time_min=10,
                                 queue=self.queues.queue, #uncertain about this
                                 project=self.queues.project,#uncertain about this
