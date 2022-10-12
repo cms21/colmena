@@ -1,6 +1,7 @@
 """Perform GPR Active Learning where simulations are sent in batches"""
 from colmena.thinker import BaseThinker, agent
 from colmena.task_server import ParslTaskServer
+from colmena.task_server import BalsamTaskServer
 from colmena.redis.queue import ClientQueues, make_queue_pairs
 from sklearn.gaussian_process import GaussianProcessRegressor, kernels
 from sklearn.preprocessing import MinMaxScaler
@@ -18,7 +19,7 @@ import json
 import sys
 import os
 
-balsam_site = 'my-laptop'
+balsam_site = 'colmena-test'
 
 # Hard code the function to be optimized
 def ackley(x: np.ndarray, a=20, b=0.2, c=2 * np.pi, mean_rt=0, std_rt=0.1) -> np.ndarray:
@@ -150,9 +151,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     # Connect to the redis server
-    #client_queues, server_queues = make_queue_pairs(args.redishost, args.redisport, serialization_method='json')
-    server_queues = 'local'
-
+    client_queues, server_queues = make_queue_pairs(args.redishost, args.redisport, serialization_method='json')
 
     # Make the output directory
     out_dir = os.path.join('runs',
