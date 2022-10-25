@@ -10,7 +10,8 @@ from colmena.models import Result
 from colmena.redis.queue import ClientQueues, TaskServerQueues
 from colmena.task_server.base import BaseTaskServer
 
-from balsam.api import Job,Site,BatchJob
+from balsam.api import Job,Site,BatchJob,ApplicationDefinition
+from balsam._api.models import App
 
 logger = logging.getLogger(__name__)
 
@@ -19,10 +20,12 @@ class BalsamTaskServer(BaseTaskServer):
     """Implementation of a task server which executes applications registered with a Balsam workflow database"""
 
     def __init__(self,
+                 #methods: List[str], # a list of apps registered in the Balsam site
+                 num_nodes: int, # Number of nodes to request for the BatchJob, if we use elastic queuing, this could change
                  queues: TaskServerQueues, 
                  pull_frequency: float,
                  balsam_site: str,
-                 aliases: Optional[Dict[str, str]] = None,
+                 method_aliases: Optional[Dict[str, str]] = None,
                  timeout: Optional[int] = None):
         """
         Args:
@@ -32,8 +35,9 @@ class BalsamTaskServer(BaseTaskServer):
             timeout: Timeout for requests from the task queue
         """
         super().__init__(queues, timeout)
-        self.aliases = aliases.copy()
+        self.method_aliases = method_aliases.copy()
         self.pull_frequency = pull_frequency
+        self.num_nodes = num_nodes
 
         # Ongoing tasks
         self.ongoing_tasks: Dict[str, Result] = dict() #Is this running tasks?
@@ -41,22 +45,33 @@ class BalsamTaskServer(BaseTaskServer):
         # Placeholder for a client objects
         self.balsam_site = balsam_site
 
+        # Check that the apps are registered in the site
+        site = Site.objects.get(name=self.balsam_site)
+        registered_apps = [a.name for a in App.objects.filter(site_id=site.id)]
+        if len(registered_apps)== 0:
+            raise ValueError(f"No apps registered in Balsam site {site.name}")
+        for method in method_aliases:
+            if method_aliases[method] not in registered_apps:
+                raise ValueError(f'Method {method_aliases[method]} not registered in Balsam site {site.name}')
 
     def process_queue(self, topic: str, task: Result):
         # TODO (wardlt): Send the task to Balsam
 
         # Get the name of the method
         #app_name should be a string that the app is registered under in the balsam site
-        app_name = self.aliases.get(task.method)
+        #I'm assuming that task.method is a string
+        app_name = self.method_aliases[task.method]
         job = Job(app_id=app_name, 
                 site_name=self.balsam_site,
-                workdir=task.workdir,
-                parameters=task.args,
+                workdir=str(task.task_id), #this needs to be a unique path where balsam will run the task.  It is relative to data within the site.
+                parameters=task.inputs,
                 tags={'topic': topic, 'server_id': self.server_id, 'colmena_task_id': task.task_id, 'returned_to_colmena':False},
                 num_nodes=task.resources.node_count,
-                node_packing_count=task.resources.node_packing_count,
-                ranks_per_node=task.resources.ranks_per_node,
-                gpus_per_rank=task.resources.gpus_per_rank
+                #node_packing_count=? If we want more than one task to run on a node we need to set this
+                ranks_per_node=task.resources.cpu_processes,
+                threads_per_rank=task.resources.cpu_threads,
+                #threads_per_core=? I'm going to assume that cpu_threads is defined per MPI rank, not physical core
+                #gpus_per_rank=? how does colmena define the number of gpus per rank?
                 )
         job.save()
         task_id = job.id
@@ -83,7 +98,7 @@ class BalsamTaskServer(BaseTaskServer):
                 #I'm also uncertain how runtime should be defined.
                 #Should it be the time between when the job enters the CREATED state to the JOB_FINISHED state 
                 # or the time in the RUNNING state?  Either way we would access the events to get this info
-                result.set_result(job.result, runtime) 
+                result.set_result(job.result(timeout=self.timeout)) 
                 result.serialize()
 
                 # Send it back to the client

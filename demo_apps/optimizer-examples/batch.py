@@ -193,10 +193,12 @@ if __name__ == '__main__':
     # Create the task server and task generator
     my_ackley = partial(ackley, mean_rt=np.log(args.runtime), std_rt=np.log(args.runtime_var))
     update_wrapper(my_ackley, ackley)
-    doer = BalsamTaskServer([my_ackley], 
+    BatchJob_num_nodes = 1
+    doer = BalsamTaskServer(BatchJob_num_nodes,
+                            [my_ackley], 
                             server_queues, 
                             balsam_site, 
-                            aliases={'ackley':'Ackley'})
+                            method_aliases={'ackley':'Ackley'})
     thinker = Thinker(client_queues, out_dir, dim=args.dim, n_guesses=args.num_guesses,
                       batch_size=args.num_parallel)
     logging.info('Created the task server and task generator')
