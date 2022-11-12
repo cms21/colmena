@@ -1,7 +1,7 @@
 """Perform GPR Active Learning where simulations are sent in batches"""
 from colmena.thinker import BaseThinker, agent
 from colmena.task_server import ParslTaskServer
-from colmena.task_server import BalsamTaskServer
+from colmena.task_server.balsam import BalsamTaskServer
 from colmena.redis.queue import ClientQueues, make_queue_pairs
 from sklearn.gaussian_process import GaussianProcessRegressor, kernels
 from sklearn.preprocessing import MinMaxScaler
@@ -54,12 +54,12 @@ def ackley(x: np.ndarray, a=20, b=0.2, c=2 * np.pi, mean_rt=0, std_rt=0.1) -> np
     y = - a * np.exp(-b * np.sqrt(np.sum(x ** 2, axis=1) / d)) - np.exp(np.cos(c * x).sum(axis=1) / d) + a + np.e
     return y[0]
 
-
 class Ackley(ApplicationDefinition):
     site = balsam_site
     def run(self,x_in):
         return ackley(x_in)
 Ackley.sync()
+method_aliases={'ackley':['Ackley',['x_in']]}
 
 class Thinker(BaseThinker):
     """Tool that monitors results of simulations and calls for new ones, as appropriate"""
@@ -87,7 +87,7 @@ class Thinker(BaseThinker):
 
         # Make a random guess to start
         for i in range(self.batch_size):
-            self.queues.send_inputs(np.random.uniform(-32.768, 32.768, size=(self.dim,)).tolist())
+            self.queues.send_inputs(np.random.uniform(-32.768, 32.768, size=(self.dim,)).tolist(),method='ackley')
         self.logger.info('Submitted initial random guesses to queue')
         train_X = []
         train_y = []
@@ -123,7 +123,7 @@ class Thinker(BaseThinker):
             self.logger.info(f'Selected {len(best_inds)} best samples. EI: {ei[best_inds]}')
             for i in best_inds:
                 best_ei = sample_X[i, :]
-                self.queues.send_inputs(best_ei.tolist())
+                self.queues.send_inputs(best_ei.tolist(),method='ackley')
             self.logger.info('Sent all of the inputs')
 
             # Wait for the value to complete
@@ -169,36 +169,22 @@ if __name__ == '__main__':
                         handlers=[logging.FileHandler(os.path.join(out_dir, 'runtime.log')),
                                   logging.StreamHandler(sys.stdout)])
 
-    # # Write the configuration
-    # config = Config(
-    #     executors=[
-    #         HighThroughputExecutor(
-    #             address="localhost",
-    #             label="htex",
-    #             # Max workers limits the concurrency exposed via mom node
-    #             max_workers=args.num_parallel,
-    #             cores_per_worker=0.0001,
-    #             worker_port_range=(10000, 20000),
-    #             provider=LocalProvider(
-    #                 init_blocks=1,
-    #                 max_blocks=1,
-    #             ),
-    #         ),
-    #         ThreadPoolExecutor(label="local_threads", max_threads=4)
-    #     ],
-    #     strategy=None,
-    # )
-    # config.run_dir = os.path.join(out_dir, 'run-info')
 
     # Create the task server and task generator
-    my_ackley = partial(ackley, mean_rt=np.log(args.runtime), std_rt=np.log(args.runtime_var))
-    update_wrapper(my_ackley, ackley)
-    BatchJob_num_nodes = 1
-    doer = BalsamTaskServer(BatchJob_num_nodes,
-                            [my_ackley], 
-                            server_queues, 
+    
+    # These are the settings used to launch a Balsam BatchJob
+    BatchJobSettings = {'num_nodes':1,
+                        'wall_time_min':10,
+                        'queue':'debug', 
+                        'project':'datascience',
+                        'job_mode':"mpi"}
+
+    pull_frequency = 10. #Do not know what is a reasonable number
+    doer = BalsamTaskServer(BatchJobSettings, #change to config object with batchjob options
+                            server_queues,
+                            pull_frequency, 
                             balsam_site, 
-                            method_aliases={'ackley':'Ackley'})
+                            method_aliases=method_aliases)
     thinker = Thinker(client_queues, out_dir, dim=args.dim, n_guesses=args.num_guesses,
                       batch_size=args.num_parallel)
     logging.info('Created the task server and task generator')

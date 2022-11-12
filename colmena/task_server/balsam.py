@@ -20,8 +20,7 @@ class BalsamTaskServer(BaseTaskServer):
     """Implementation of a task server which executes applications registered with a Balsam workflow database"""
 
     def __init__(self,
-                 #methods: List[str], # a list of apps registered in the Balsam site
-                 num_nodes: int, # Number of nodes to request for the BatchJob, if we use elastic queuing, this could change
+                BatchJobSettings: Dict[str,str],
                  queues: TaskServerQueues, 
                  pull_frequency: float,
                  balsam_site: str,
@@ -37,7 +36,7 @@ class BalsamTaskServer(BaseTaskServer):
         super().__init__(queues, timeout)
         self.method_aliases = method_aliases.copy()
         self.pull_frequency = pull_frequency
-        self.num_nodes = num_nodes
+        self.BatchJobSettings = BatchJobSettings.copy()
 
         # Ongoing tasks
         self.ongoing_tasks: Dict[str, Result] = dict() #Is this running tasks?
@@ -51,7 +50,7 @@ class BalsamTaskServer(BaseTaskServer):
         if len(registered_apps)== 0:
             raise ValueError(f"No apps registered in Balsam site {site.name}")
         for method in method_aliases:
-            if method_aliases[method] not in registered_apps:
+            if method_aliases[method][0] not in registered_apps:
                 raise ValueError(f'Method {method_aliases[method]} not registered in Balsam site {site.name}')
 
     def process_queue(self, topic: str, task: Result):
@@ -60,12 +59,16 @@ class BalsamTaskServer(BaseTaskServer):
         # Get the name of the method
         #app_name should be a string that the app is registered under in the balsam site
         #I'm assuming that task.method is a string
-        app_name = self.method_aliases[task.method]
+        app_name = self.method_aliases[task.method][0]
+        #print(app_name,self.balsam_site,task.task_id,task.inputs,topic,task.resources.node_count)
+        job_params = {}
+        for i,p in enumerate(self.method_aliases[task.method][1]):
+            job_params[p] = task.inputs[i]
         job = Job(app_id=app_name, 
                 site_name=self.balsam_site,
                 workdir=str(task.task_id), #this needs to be a unique path where balsam will run the task.  It is relative to data within the site.
-                parameters=task.inputs,
-                tags={'topic': topic, 'server_id': self.server_id, 'colmena_task_id': task.task_id, 'returned_to_colmena':False},
+                parameters=job_params,
+                tags={'topic': topic, 'colmena_task_id': task.task_id, 'returned_to_colmena':"False"},
                 num_nodes=task.resources.node_count,
                 #node_packing_count=? If we want more than one task to run on a node we need to set this
                 ranks_per_node=task.resources.cpu_processes,
@@ -75,6 +78,7 @@ class BalsamTaskServer(BaseTaskServer):
                 )
         job.save()
         task_id = job.id
+        #task.worker_info.task_id = task_id
         logger.info(f'Submitted a {app_name} task to Balsam: {task_id}')
 
     def _query_results(self):
@@ -91,6 +95,7 @@ class BalsamTaskServer(BaseTaskServer):
             for job in new_jobs:
                 # Get the associated Colmena task
                 result = self.ongoing_tasks.pop(job.tags['colmena_task_id'])
+                result.deserialize()
                 job.tags['returned_to_colmena'] = True
 
                 # Add the result to the Colmena message and serialize it all
@@ -107,22 +112,16 @@ class BalsamTaskServer(BaseTaskServer):
     def _setup(self): 
         # TODO (wardlt): Prepare to send and receive tasks from Balsam
         # Connect to Balsam
-        #I think this is equivalent to starting the balsam site? (e.g. %balsam site start).  This is typically done at the command line.  
-        #self.balsam_client = self.login_creds
-        #Instead, I'll get the site object from the name
+        
         site = Site.objects.get(name=self.balsam_site)
 
-        # Launch a thread
-        #return_thread = Thread(target=self._query_results, daemon=True)
-        #return_thread.start()
-        
         #I'm not sure, but is this where we should start the launcher?
-        BatchJob.objects.create(num_nodes=self.num_nodes,
-                                wall_time_min=10,
-                                queue=self.queues.queue, #uncertain about this
-                                project=self.queues.project,#uncertain about this
+        BatchJob.objects.create(num_nodes=self.BatchJobSettings['num_nodes'],
+                                wall_time_min=self.BatchJobSettings['wall_time_min'],
+                                queue=self.BatchJobSettings['queue'], 
+                                project=self.BatchJobSettings['project'],
                                 site_id=site.id,
-                                job_mode="mpi"
+                                job_mode=self.BatchJobSettings['job_mode']
                                 )
 
 
