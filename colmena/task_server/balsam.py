@@ -78,6 +78,7 @@ class BalsamTaskServer(BaseTaskServer):
                 #gpus_per_rank=? how does colmena define the number of gpus per rank?
                 )
         job.save()
+        self.ongoing_tasks[job.id] = task
         task_id = job.id
         #task.worker_info.task_id = task_id
         logger.info(f'Submitted a {app_name} task to Balsam: {task_id}')
@@ -91,32 +92,33 @@ class BalsamTaskServer(BaseTaskServer):
             #get the site id
             site = Site.objects.get(name=self.balsam_site)
             #use the filtering function to identify finished jobs in the site
-            new_jobs = Job.objects.filter(site_id=site.id,state='JOB_FINISHED',tags={'returned_to_colmena':False})
+            new_jobs = Job.objects.filter(site_id=site.id,state='JOB_FINISHED',tags={"returned_to_colmena":False})
+            logger.info(f"Found {len(new_jobs)} finished Balsam jobs")
             # Send the completed tasks back
             for job in new_jobs:
                 # Get the associated Colmena task
-                result = self.ongoing_tasks.pop(job.tags['colmena_task_id'])
-                result.deserialize()
-                job.tags['returned_to_colmena'] = True
-
-                # Add the result to the Colmena message and serialize it all
-                #I'm not sure what form this result takes and how to pass it
-                #I'm also uncertain how runtime should be defined.
-                #Should it be the time between when the job enters the CREATED state to the JOB_FINISHED state 
-                # or the time in the RUNNING state?  Either way we would access the events to get this info
-                result.set_result(job.result(timeout=self.timeout)) 
-                result.serialize()
+                try:
+                    finished_task = self.ongoing_tasks.pop(job.id)
+                except KeyError:
+                    logger.info(f"Colmena is not waiting for Balsam job {job.id}")
+                    continue
+              
+                finished_task.set_result(job.result())
 
                 # Send it back to the client
-                self.queues.send_result(result, job.tags['topic'])
+                self.queues.send_result(finished_task, job.tags['topic'])
+                return_tags = job.tags.copy()
+                return_tags['returned_to_colmena']=True
+                job.tags = return_tags
+                job.save()
 
     def _setup(self): 
-        # TODO (wardlt): Prepare to send and receive tasks from Balsam
-        # Connect to Balsam
+        
+        from threading import Thread
         
         site = Site.objects.get(name=self.balsam_site)
 
-        #I'm not sure, but is this where we should start the launcher?
+        #Start launcher
         BatchJob.objects.create(num_nodes=self.BatchJobSettings['num_nodes'],
                                 wall_time_min=self.BatchJobSettings['wall_time_min'],
                                 queue=self.BatchJobSettings['queue'], 
@@ -125,4 +127,6 @@ class BalsamTaskServer(BaseTaskServer):
                                 job_mode=self.BatchJobSettings['job_mode']
                                 )
 
+        query_thread = Thread(target=self._query_results,daemon=True)
+        query_thread.start()
 

@@ -175,7 +175,7 @@ if __name__ == '__main__':
     # These are the settings used to launch a Balsam BatchJob
     BatchJobSettings = {'num_nodes':1,
                         'wall_time_min':10,
-                        'queue':'debug', 
+                        'queue':'preemptable', 
                         'project':'datascience',
                         'job_mode':"mpi",
                         'node_packing_count':32}
