@@ -177,7 +177,8 @@ if __name__ == '__main__':
                         'wall_time_min':10,
                         'queue':'debug', 
                         'project':'datascience',
-                        'job_mode':"mpi"}
+                        'job_mode':"mpi",
+                        'node_packing_count':32}
 
     pull_frequency = 10. #Do not know what is a reasonable number
     doer = BalsamTaskServer(BatchJobSettings, #change to config object with batchjob options

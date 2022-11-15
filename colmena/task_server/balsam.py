@@ -59,6 +59,7 @@ class BalsamTaskServer(BaseTaskServer):
         # Get the name of the method
         #app_name should be a string that the app is registered under in the balsam site
         #I'm assuming that task.method is a string
+        task.deserialize()
         app_name = self.method_aliases[task.method][0]
         #print(app_name,self.balsam_site,task.task_id,task.inputs,topic,task.resources.node_count)
         job_params = {}
@@ -68,9 +69,9 @@ class BalsamTaskServer(BaseTaskServer):
                 site_name=self.balsam_site,
                 workdir=str(task.task_id), #this needs to be a unique path where balsam will run the task.  It is relative to data within the site.
                 parameters=job_params,
-                tags={'topic': topic, 'colmena_task_id': task.task_id, 'returned_to_colmena':"False"},
+                tags={'topic': topic, 'colmena_task_id': task.task_id, 'returned_to_colmena':False},
                 num_nodes=task.resources.node_count,
-                #node_packing_count=? If we want more than one task to run on a node we need to set this
+                node_packing_count=self.BatchJobSettings['node_packing_count'],#If we want more than one task to run on a node we need to set this
                 ranks_per_node=task.resources.cpu_processes,
                 threads_per_rank=task.resources.cpu_threads,
                 #threads_per_core=? I'm going to assume that cpu_threads is defined per MPI rank, not physical core
